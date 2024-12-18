@@ -1,0 +1,277 @@
+@Library('jenkins-upstream-library') _
+
+pipeline {
+    agent {
+        docker {
+            image 'quay.io/rh_ee_ahonkala/console-e2e-ci:v3.12.24'
+            args '-v /etc/resolv.conf:/etc/resolv.conf -v /run/containerd/containerd.sock:/run/containerd/containerd.sock'
+            label 'jump-vpc-x86_64'
+        }
+    }
+    options { disableConcurrentBuilds() }
+    parameters {
+        string(defaultValue: '', description: 'Build(quay image or build number)', name: 'Build')
+        string(defaultValue: '', description: 'Build Release', name: 'Release')
+        string(defaultValue: '720', description: 'Enter time(in Minutes) to retain the cluster', name: 'KeepFor')
+        string(name: 'Suite', defaultValue: 'e2e', description: 'Enter a suite path as tests/dir/suite.cy.ts')
+        string(name: 'Retries', defaultValue: '1', description: 'Enter number of retries')
+    }
+
+    environment {
+        //users and credentials. All must be defined in Jenkins Credentials
+        GITHUB_USER = credentials('GITHUB_USER')
+        GITHUB_TOKEN = credentials('GITHUB_TOKEN')
+        OS_USERNAME = credentials('OS_USERNAME')
+        OS_PASSWORD = credentials('OS_PASSWORD')
+        ARTIFACTORY_USER = credentials('ARTIFACTORY_USER')
+        ARTIFACTORY_TOKEN = credentials('ARTIFACTORY_TOKEN')
+        REDHAT_USERNAME = credentials('REDHAT_USERNAME')
+        REDHAT_PASSWORD = credentials('REDHAT_PASSWORD')
+        PULL_SECRET = credentials('PULL_SECRET')
+
+        //IBM Cloud API key is used for uploading must-gather logs to IBM COS
+        IBMCLOUD_API_KEY = credentials('IBM_PCLOUD_QE_API_KEY')
+
+        //Parameters
+        OCP_RELEASE="${params.Release}"
+        CONFIG_TYPE="min"
+        BUILD="${params.Build}"
+        TIMEOUT = "${params.KeepFor}"
+        ENABLE_E2E_TEST= false
+        
+        //Branch
+        OPENSHIFT_POWERVC_GIT_TF_DEPLOY_BRANCH="main"//The download branch
+
+        //Env constants
+        HARDWARE_CHOSE = "P9"
+        TARGET = "deploy-openshift4-powervc"
+        TEMPLATE_FILE = ".${TARGET}.tfvars.template"
+        TERRAFORM_VER = "1.9.6"
+        POWERVS = false
+        SCRIPT_DEPLOYMENT = false
+        WAIT_FOR_DEBUG = "0"
+        ENABLE_SCALE_TEST="false"
+        // kdump Configuration
+        KDUMP_ENABLE="false" 
+
+        //Console UI e2e input vars
+        ENABLE_CONSOLE_E2E_TEST="true"
+        DRIVER="Cypress"
+        SUITE2RUN="${params.Suite}"
+        RETRIES="${params.Retries}"
+        JTIMEOUT=180000
+    }
+
+    stages {
+        stage('Clone ansible extra') {
+            steps {
+                cloneRepo("https://github.com/ocp-power-automation/ocp4-playbooks-extras", "ocp4-playbooks-extras", "*/main")
+            }
+        }
+        stage('Setup Common Environment Variables') {
+            steps {
+                setupCommonEnvironmentVariables()
+                setupClusterConfig("${CONFIG_TYPE}")
+                script {
+                    env.INSTANCE_NAME = "rdr-zstream-p9"
+                    env.BASTION_VCPUS = "1"
+                    env.BOOTSTRAP_VCPUS = "1"
+                    env.BOOTSTRAP_MEMORY = "8"
+                    env.MOUNT_ETCD_RAMDISK = "false"
+                    env.SETUP_SQUID_PROXY = "true"
+
+                    if (env.OCP_RELEASE == "4.12") {
+                        env.REDHAT_RELEASE = "9.2"
+                        env.GOLANG_TARBALL = "https://golang.org/dl/go1.18.6.linux-ppc64le.tar.gz"
+                    }
+                    else if (env.OCP_RELEASE == "4.13"){
+                        env.REDHAT_RELEASE = "9.2"
+                        env.GOLANG_TARBALL = "https://golang.org/dl/go1.19.linux-ppc64le.tar.gz"
+                    }
+                    else if (env.OCP_RELEASE == "4.14") {
+                        env.REDHAT_RELEASE = "9.2"
+                        env.GOLANG_TARBALL = "https://golang.org/dl/go1.20.linux-ppc64le.tar.gz"
+                    }
+                    else if (env.OCP_RELEASE == "4.15") {
+                        env.REDHAT_RELEASE = "9.3"
+                        env.GOLANG_TARBALL = "https://golang.org/dl/go1.22.0.linux-ppc64le.tar.gz"
+                    }
+                    else if (env.OCP_RELEASE == "4.16"){
+                        env.REDHAT_RELEASE = "9.4"
+                        env.GOLANG_TARBALL = "https://golang.org/dl/go1.22.0.linux-ppc64le.tar.gz"
+                    }
+                    else {
+                        env.REDHAT_RELEASE = "9.4"
+                        env.GOLANG_TARBALL = "https://golang.org/dl/go1.22.4.linux-ppc64le.tar.gz"
+                    }
+                }
+            }
+        }
+        stage('pull artifact') {
+            steps {
+                script {
+                    getArtifacts("powervm/poll-powervc-images", "cicd-rhcos-${OCP_RELEASE}.latest.txt")
+                    getArtifacts("powervm/poll-powervc-images", "cicd-rhel-${REDHAT_RELEASE}.latest.txt")
+                }
+            }
+        }
+        //Checkout the installer git repo
+        stage('Prepare Terraform Template') {
+            steps {
+                script {
+                    ansiColor('xterm') {
+                        echo ""
+                    }
+                    try
+                    {
+                        gbToMb()
+                        pullSecret()
+                        env.OPENSHIFT_IMAGE = ""
+                        if (env.BUILD?.trim()) {
+                            if (!env.BUILD.contains('quay')) {
+                                env.OPENSHIFT_IMAGE  = "docker-na.artifactory.swg-devops.com/sys-powercloud-docker-local/ocp-ppc64le/release-ppc64le:${env.BUILD}"
+                                sh '''
+                                    nerdctl login -u ${ARTIFACTORY_USER} -p ${ARTIFACTORY_TOKEN} docker-na.artifactory.swg-devops.com/sys-powercloud-docker-local
+                                    nerdctl pull ${OPENSHIFT_IMAGE}
+                                    if [ $? -ne 0 ]; then
+                                        echo "${OPENSHIFT_IMAGE} not found"
+                                        exit 1
+                                    fi
+                                    nerdctl rmi ${OPENSHIFT_IMAGE}
+                                '''
+                            }
+                            else {
+                               env.OPENSHIFT_IMAGE=env.BUILD
+                            }
+                        }
+                        else {
+                            echo "CURRENT build is empty"
+                            throw err
+                        }
+
+                        currentBuild.description = "OCP Build: ${env.OPENSHIFT_IMAGE.split(':')[1].trim()}"
+
+                        if (fileExists("deploy/artifactory/cicd-rhcos-${OCP_RELEASE}.latest.txt")) {
+                            env.RHCOS_IMAGE = readFile "deploy/artifactory/cicd-rhcos-${OCP_RELEASE}.latest.txt"
+                            env.RHCOS_IMAGE_NAME = env.RHCOS_IMAGE.split()[0].trim()
+                            env.RHCOS_IMAGE_ID = env.RHCOS_IMAGE.split()[1].trim()
+                        }
+                        else {
+                            echo "cicd-rhcos-${OCP_RELEASE}.latest.txt file does not exist. Please check poll-powervc-images job"
+                            throw err
+                        }
+                        if (fileExists("deploy/artifactory/cicd-rhel-${REDHAT_RELEASE}.latest.txt")) {
+                            env.BASTION_IMAGE = readFile "deploy/artifactory/cicd-rhel-${REDHAT_RELEASE}.latest.txt"
+                            env.BASTION_IMAGE_NAME = env.BASTION_IMAGE.split()[0].trim()
+                            env.BASTION_IMAGE_ID = env.BASTION_IMAGE.split()[1].trim()
+                        }
+                        else {
+                            echo "cicd-rhel-${REDHAT_RELEASE}.latest.txt file does not exist. Please check poll-powervc-images job"
+                            throw err
+                        }
+                        if (env.DEPLOY_MASTER == "false")
+                        {
+                            echo "Cluster cant deploy without master"
+                            throw err
+                        }
+                        
+                        createTemplate(env.OS_AUTH_URL, env.MASTER_VCPUS , "${MASTER_MEMORY_MB}", env.MASTER_PROCESSORS, env.MASTER_TEMPLATE)
+                        createTemplate(env.OS_AUTH_URL, env.WORKER_VCPUS , "${WORKER_MEMORY_MB}", env.WORKER_PROCESSORS, env.WORKER_TEMPLATE)
+                        createTemplate(env.OS_AUTH_URL, env.BASTION_VCPUS , "${BASTION_MEMORY_MB}", env.BASTION_PROCESSORS, env.BASTION_TEMPLATE)
+                        createTemplate(env.OS_AUTH_URL, env.BOOTSTRAP_VCPUS , "${BOOTSTRAP_MEMORY_MB}", env.BOOTSTRAP_PROCESSORS, env.BOOTSTRAP_TEMPLATE)
+                    }
+                    catch (err)
+                    {
+                        echo 'Error ! Template preparation failed !'
+                        env.FAILED_STAGE=env.STAGE_NAME
+                        throw err
+                    }
+                }
+            }
+        }
+        stage('Initialize Environment') {
+            steps {
+                initializeEnvironment()
+            }
+        }
+        stage('Setup Terraform Plugin') {
+            steps {
+                setupTerraformPlugin()
+            }
+        }
+        stage('Deploy OCP Cluster') {
+            steps {
+                deployCluster()
+            }
+        }
+        stage('Run crontab script for capturing outputs of multiple commands') {
+            steps {
+                crontabCommandCaptureScript()
+            }
+        }
+        stage('Setup Kubectl') {
+            steps {
+                setupKubeconfigOcp4()
+            }
+        }
+        
+        // Setup for console UI e2e tests run
+        stage('Setup and run ansible extra') {
+            steps {
+                sh '${WORKSPACE}/scripts/setup-console-e2e.sh'
+            }
+        }
+        stage('Gather pprof and prometheus data') {
+            steps {
+                gatherPrometheusData()
+            }
+        }
+        stage('Waiting to timeout') {
+            steps {
+                script {
+                    ansiColor('xterm') {
+                        echo ""
+                    }
+                    try {
+                            TIMEOUT_MIN = TIMEOUT.toInteger()
+                            if ( TIMEOUT_MIN != 0 )
+                            {
+                                TIMEOUT_SEC=TIMEOUT_MIN*60
+                                echo "HOLDING THE CLUSTER TEAR DOWN FOR ${TIMEOUT_MIN} MINUTES"
+                                sleep TIMEOUT_SEC
+                            }
+                        }
+                    catch (err) {
+                            echo 'Error ! Timeout stage failed!'
+                            env.FAILED_STAGE=env.STAGE_NAME
+                            throw err
+                    }
+                }
+            }
+        }
+    }
+    post {
+        always {
+            script {
+                try{
+                    archiveAllArtifacts("deploy/conformance-parallel-out.txt.tar.gz", "deploy/summary.txt", "deploy/vars.tfvars",
+                        "cpu-pre.pprof", "heap-pre.pprof", "prometheus.tar.gz", "deploy/cron.log", "deploy/${SUITE2RUN}-*.txt", "deploy/input.json")
+                    storeMustGatherLogs()
+                    checkInfraError()
+                    processE2eResults()
+                }
+                catch (err){
+                    echo 'Error ! Always block failed!' 
+                }
+                finally{
+                    cleanupOcp4Cluster()
+                    // Only notify if the build was not aborted or canceled
+                    if (currentBuild.result != 'ABORTED') {
+                        notifyBySlack(currentBuild.result, env.MESSAGE)
+                    }
+                    cleanWs()
+                }
+            }
+        }
+    }
+}
