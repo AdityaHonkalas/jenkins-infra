@@ -3,13 +3,13 @@
 # Setup the console repo for running the OCP console UI e2e tests
 CONSOLE_REPO="https://github.com/openshift/console"
 HOSTDIR=/host
-CONSOLEDIR=/console
+CONSOLEDIR=/root/console
 
 # Build the console test code
 echo "Step-1: Setting up the console repository"
 echo ""
 # switch to the root path
-cd /
+cd /root
 git clone $CONSOLE_REPO
 cd $CONSOLEDIR
 git checkout "release-${OCP_RELEASE}"
@@ -32,11 +32,11 @@ echo "Cluster server URL: ${APIURL}"
 echo ""
 # Extract the password
 scp -i id_rsa -o StrictHostKeyChecking=no  root@${BASTION_IP}:/root/openstack-upi/auth/kubeadmin-password ~/.kube
-KUBEADPASSWD=$(cat ~/kube/kubeadmin-password)
+KUBEADPASSWD=$(cat ~/.kube/kubeadmin-password)
 echo "Kubeadmin password: ${KUBEADPASSWD}"
 echo ""
 
-# Create a htpasswd user for console multiuser-auth test ------> **Need to be validated**
+# Create a htpasswd user for console multiuser-auth test
 IDP_NAME="htpasswd_identity_provider"
 HTPASS_USER="user01"
 HTPASS_PASSWD="keypass123"
@@ -45,6 +45,9 @@ echo "Setting up htpasswd"
 git clone https://github.com/ocp-power-automation/ocp4-playbooks-extras
 cd ocp4-playbooks-extras
 cp examples/inventory inventory
+sed -i "s|localhost|${BASTION_IP}|g" inventory
+sed -i 's/ansible_connection=local/ansible_connection=ssh/g' inventory
+sed -i "s|ssh|ssh ansible_ssh_private_key_file=${WORKSPACE}/deploy/id_rsa|g" inventory
 cp examples/all.yaml .
 sed -i 's/htpasswd_identity_provider: false/htpasswd_identity_provider: true/g' all.yaml
 sed -i 's/htpasswd_username: ""/htpasswd_username: "${HTPASS_USER}"/g' all.yaml
@@ -59,6 +62,13 @@ fi
 
 # create a input.json file
 echo "input.json params file: "
+
+# if /host is not exists, create the /host directory
+if [ ! -d $HOSTDIR ]; 
+then
+  mkdir $HOSTDIR
+fi
+
 cat > $HOSTDIR/input.json <<EOF
 {
   "apiurl": "${APIURL}",
@@ -77,11 +87,9 @@ EOF
 cat $HOSTDIR/input.json
 echo ""
 
-# ls output for /host path
-ls $HOSTDIR
 
 # Trigger the console-e2e.sh from the / path
-./console-e2e.sh
+source /console-e2e.sh
 
 # Copy the test output logs and artifacts to the ${WORKSPACE}/deploy
 if [ $? -eq 0 ]; then
