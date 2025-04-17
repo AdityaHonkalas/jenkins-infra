@@ -112,7 +112,8 @@ deploy-openshift4-powervc: %deploy-openshift4-powervc:
         -e "s|__HELPERNODE_REPO__|$(HELPERNODE_REPO)|g" -e "s|__HELPERNODE_TAG__|$(HELPERNODE_TAG)|g"\
         -e "s|__DATA_VOLUME_COUNT__|$(DATA_VOLUME_COUNT)|g" -e "s|__DATA_VOLUME_SIZE__|$(DATA_VOLUME_SIZE)|g" \
         -e "s|__DNS_FORWARDERS__|$(DNS_FORWARDERS)|g" -e "s|__CHRONY_SERVERS__|$(CHRONY_SERVERS)|g" \
-        -e "s|__REPO__|$(DEPLOY_REPO)|g" -e "s|__CNI_NETWORK_PROVIDER__|$(CNI_NETWORK_PROVIDER)|g" templates/$(TERRAFORM_VARS_FILE).template > $(TERRAFORM_VARS_FILE))
+        -e "s|__REPO__|$(DEPLOY_REPO)|g" -e "s|__CNI_NETWORK_PROVIDER__|$(CNI_NETWORK_PROVIDER)|g" \
+		-e "s|__OCP_RELEASE__|$(OCP_RELEASE)|g" -e "s|__OCP_VERSION__|$(OCP_VERSION)|g" -e "s|__AI_TOKEN__|$(AI_TOKEN)|g" -e "s|__AI_INSTALL_TYPE__|$(AI_INSTALL_TYPE)|g" templates/$(TERRAFORM_VARS_FILE).template > $(TERRAFORM_VARS_FILE))
 	@$(SELF) -s deploy:openshift4:powervc OPENSHIFT_POWERVC_DEPLOY_DIR=$(TERRAFORM_DIR) OPENSHIFT_POWERVC_TERRAFORM_VARS_FILE=$(TERRAFORM_VARS_FILE)
 
 .PHONY: deploy-openshift4-powervc\:redeploy

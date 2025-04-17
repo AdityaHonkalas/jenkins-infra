@@ -12,7 +12,7 @@
         if [ $? -eq 0 ] ; then
             rm -rf ~/.kube
             mkdir ~/.kube
-            scp -i id_rsa -o StrictHostKeyChecking=no  root@${BASTION_IP}:/root/openstack-upi/auth/kubeconfig ~/.kube/config
+            scp -i id_rsa -o StrictHostKeyChecking=no root@${BASTION_IP}:"${KUBECONFIG_PATH:-/root/openstack-upi/auth/kubeconfig}" ~/.kube/config
             if [ ${POWERVS} == "false" ] ; then
                 make terraform:output TERRAFORM_DIR=.${TARGET} TERRAFORM_OUTPUT_VAR=etc_hosts_entries >> /etc/hosts
             else
