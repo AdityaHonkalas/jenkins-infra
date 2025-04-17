@@ -1,0 +1,51 @@
+## If any variables are unset, terraform will look for `TF_VAR_variable_name`
+## These parameters are needed for all deployments
+
+user_name = "__OS_USERNAME__"
+password = "__OS_PASSWORD__"
+auth_url = "__OS_AUTH_URL__"
+network_name = "__OS_NETWORK__"
+openstack_availability_zone = "__AVAILABILITY_ZONE__"
+tenant_name = "__OS_TENANT_NAME__"
+domain_name = "Default"
+network_type = "__NETWORK_TYPE__"
+
+public_key_file = "id_rsa.pub"
+private_key_file  = "id_rsa"
+
+private_key = ""
+public_key  = ""
+
+bastion = { instance_type  = "__BASTION_TEMPLATE__", image_id = "__BASTION_IMAGE_ID__" }
+bootstrap = { instance_type  = "__BOOTSTRAP_TEMPLATE__", image_id = "__RHCOS_IMAGE_ID__",  "count"   = 0 }
+master = { instance_type  = "__MASTER_TEMPLATE__", image_id = "__RHCOS_IMAGE_ID__",  "count"   = __NUM_OF_MASTERS__ }
+worker = { instance_type  = "__WORKER_TEMPLATE__", image_id = "__RHCOS_IMAGE_ID__",  "count"   = __NUM_OF_WORKERS__ }
+
+## RedHat Subscription credentials
+rhel_subscription_username = "__REDHAT_USERNAME__"
+rhel_subscription_password = "__REDHAT_PASSWORD__"
+rhel_subscription_org           = ""                        # Define it only when using activationkey for RHEL subscription
+rhel_subscription_activationkey = ""                        # Define it only when using activationkey for RHEL subscription
+
+rhel_username = "__RHEL_USERNAME__"
+
+openshift_install_tarball =  "__OPENSHIFT_INSTALL_TARBALL__"
+openshift_client_tarball = "__OPENSHIFT_CLIENT_TARBALL__"
+release_image_override = "__OPENSHIFT_IMAGE__"
+pull_secret_file = "__PULL_SECRET_FILE__"
+cluster_domain = "__CLUSTER_DOMAIN__"
+cluster_id_prefix = "__INSTANCE_NAME__"
+
+connection_timeout = "__CONNECTION_TIME_OUT__"
+
+#################################
+# define the install type: agent based install, assisted install or SNO
+install_type = "__AI_INSTALL_TYPE__"
+
+### OpenShift Installation Details
+
+ansible_extra_options      = "-vv"
+dns_forwarders = "__DNS_FORWARDERS__"
+
+scg_id = "__SCG_ID__"
+volume_storage_template = "__VOLUME_STORAGE_TEMPLATE__"

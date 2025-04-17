@@ -1,0 +1,287 @@
+@Library('jenkins-upstream-library@ai-new') _
+pipeline {
+    agent {
+        docker {
+            image 'quay.io/powercloud/inbound-agent:3256.v88a_f6e922152-2-jdk17.1'
+            args '-v /etc/resolv.conf:/etc/resolv.conf -v /run/containerd/containerd.sock:/run/containerd/containerd.sock'
+            label 'jump-vpc-x86_64'
+        }
+    }
+    parameters {
+        string(defaultValue: '', description: 'Build(quay image or build number)(Optional: this is for `release_image_override`)', name: 'Build')
+        string(defaultValue: '10', description: 'Enter time(in Minutes) to retain the cluster', name: 'KeepFor')
+        string(defaultValue: '1.22.4', description: 'Enter the Go Language Version', name: 'GoLangVersion')
+        choice(description: 'Select the assisted RHCOS version', choices: ['4.22','4.21','4.20','4.19', '4.18', '4.17', '4.16','4.15','4.14','4.13','4.12'], name: 'Release')
+        string(defaultValue: '4.21', description: 'Enter assisted OCP version', name: 'OcpRelease')
+        choice(description: 'Select the RedHat Release Version', choices: ['9.7','9.6','9.5','9.4','9.3','9.2','9.1','9.0', '8.8','8.7'], name: 'RedHatRelease')
+        choice(description: 'Select the AI(Assisted Installer) Install Type', choices: ['assisted', 'agent', 'sno'], name: 'InstallType')
+        choice(description: 'Select the Cluster Type (compact, sno) default type is HA', choices: ['ha', 'compact', 'sno'], name: 'clusterType')
+        booleanParam(defaultValue: false, name: 'RunE2e', description: 'Select if you want to run e2e tests. E2e runs after cluster Deployed')
+        booleanParam(defaultValue: false, name: 'multiArch', description: 'Select if you want to deploy with multi arch')
+        choice(name: 'ScgType', choices: ['npiv', 'vscsi', 'vscsi-temp'], description: 'Select one storage type')
+    }
+    environment {
+        //users and credentials. All must be defined in Jenkins Credentials
+        GITHUB_USER = credentials('GITHUB_USER')
+        GITHUB_TOKEN = credentials('GITHUB_TOKEN')
+        OS_USERNAME = credentials('OS_USERNAME')
+        OS_PASSWORD = credentials('OS_PASSWORD')
+        ARTIFACTORY_USER = credentials('ARTIFACTORY_USER')
+        ARTIFACTORY_TOKEN = credentials('ARTIFACTORY_TOKEN')
+        REDHAT_USERNAME = credentials('REDHAT_USERNAME')
+        REDHAT_PASSWORD = credentials('REDHAT_PASSWORD')
+        PULL_SECRET = credentials('AI_PULL_SECRET')
+        AI_TOKEN = credentials('AI_TOKEN')
+
+        //Env constants
+        HARDWARE_CHOSE = "P9"
+        TERRAFORM_VER = "1.9.1"
+        TARGET = "deploy-openshift4-powervc"
+        //TEMPLATE_FILE = ".${TARGET}-abi.tfvars.template"
+        AI_INSTALL_TYPE = "${params.InstallType}"
+        AI_CLUSTER_TYPE = "${params.clusterType}"
+        //OPENSHIFT_POWERVC_AI_SUBDIR = "tf-powervc"
+        POWERVS = false
+        SCRIPT_DEPLOYMENT = false
+        WAIT_FOR_DEBUG = "1"
+
+        //Branch
+        OPENSHIFT_POWERVC_GIT_TF_DEPLOY_PROJECT="https://github.com/Poorna-Gottimukkula1/ocp4-ai-power.git"
+        OPENSHIFT_POWERVC_GIT_TF_DEPLOY_BRANCH="ci"//The download branch
+
+        //E2e and Scale specific variables
+        ENABLE_E2E_TEST="true"
+        ENABLE_SCALE_TEST="false"
+        GOLANG_TARBALL="https://dl.google.com/go/go${params.GoLangVersion}.linux-ppc64le.tar.gz"
+
+        //Parameters
+        REDHAT_RELEASE="${params.RedHatRelease}"
+        OCP_RELEASE="${params.Release}"
+        OCP_VERSION="${params.OcpRelease}"
+        CONFIG_TYPE="min"
+        ENABLE_E2E="${params.RunE2e}"
+        ENABLE_MULTI="${params.multiArch}"
+        BUILD="${params.Build}"
+        TIMEOUT = "${params.KeepFor}"
+
+        // kdump Configuration
+        KDUMP_ENABLE="false"
+    }
+    stages {
+        stage('Clone ansible extra') {
+            steps {
+                cloneRepo("https://github.com/ocp-power-automation/ocp4-playbooks-extras", "ocp4-playbooks-extras", "*/main")
+            }
+        }
+        stage('Setup Common Environment Variables') {
+            steps {
+                setupCommonEnvironmentVariables()
+                setupClusterConfig("${CONFIG_TYPE}")
+                script {
+                    env.DNS_FORWARDERS = "10.0.10.5"
+                    if ( AI_INSTALL_TYPE == "assisted" || AI_INSTALL_TYPE == "agent" ){
+                        if ( AI_CLUSTER_TYPE == "sno" ){
+                            env.NUM_OF_MASTERS = "1"
+                            env.NUM_OF_WORKERS = "0"
+                            echo "Deploying ${AI_INSTALL_TYPE} sno Cluster !!!"
+                        } else if ( AI_CLUSTER_TYPE == "compact"){
+                            env.NUM_OF_MASTERS = "3"
+                            env.NUM_OF_WORKERS = "0"
+                            echo "Deploying ${AI_INSTALL_TYPE} compact Cluster !!!"
+                        } else if ( AI_CLUSTER_TYPE == "ha") {
+                            env.NUM_OF_MASTERS = "3"
+                            env.NUM_OF_WORKERS = "2"
+                            echo "Deploying ${AI_INSTALL_TYPE} ha Cluster !!!"
+                        }
+                    } else {
+                        env.NUM_OF_MASTERS = "1"
+                        env.NUM_OF_WORKERS = "0"
+                    }
+                    if ( AI_INSTALL_TYPE == "assisted" ){
+                        env.TERRAFORM_VARS_FILE = ".deploy-openshift4-powervc-ai.tfvars"
+                    } else {
+                        env.TERRAFORM_VARS_FILE = ".deploy-openshift4-powervc-abi.tfvars"
+                    }
+                    env.KUBECONFIG_PATH="/root/ocp4-workdir-${AI_INSTALL_TYPE}/auth/kubeconfig"
+                    env.INSTANCE_NAME = "${AI_INSTALL_TYPE}"
+                    env.CLUSTER_DOMAIN = "redhat.com"
+                    def storageMap = [
+                        vscsi: 'ba9df88e-d1ba-41ec-a8d9-ec0fd7af7594',
+                        npiv: '993a1363-d689-4796-82fb-77ee34e9fa10',
+                        'vscsi-temp': '36f6ebfe-5279-4f02-990a-1297370d6fc0'
+                    ]
+                    def selectedValue = storageMap[params.ScgType]
+                    echo "Selected SCG: ${params.ScgType}, ID: ${selectedValue}"
+                    env.SCG_ID = "${selectedValue}"
+                    env.MASTER_VCPUS = "2"
+                    env.WORKER_VCPUS = "2"
+                    env.MASTER_MEMORY = "32"
+                    env.WORKER_MEMORY = "32"
+                    if ( ENABLE_MULTI == "true") {
+                        if (env.OCP_RELEASE == "4.21") {
+                            env.OPENSHIFT_INSTALL_TARBALL="https://mirror.openshift.com/pub/openshift-v4/multi/clients/ocp-dev-preview/candidate-${OCP_RELEASE}/ppc64le/openshift-install-linux.tar.gz"
+                            env.OPENSHIFT_CLIENT_TARBALL="https://mirror.openshift.com/pub/openshift-v4/multi/clients/ocp-dev-preview/candidate-${OCP_RELEASE}/ppc64le/openshift-client-linux.tar.gz"
+                        }
+                        else {
+                            env.OPENSHIFT_INSTALL_TARBALL="https://mirror.openshift.com/pub/openshift-v4/multi/clients/ocp/latest-${OCP_RELEASE}/ppc64le/openshift-install-linux.tar.gz"
+                            env.OPENSHIFT_CLIENT_TARBALL="https://mirror.openshift.com/pub/openshift-v4/multi/clients/ocp/latest-${OCP_RELEASE}/ppc64le/openshift-client-linux.tar.gz"
+                        }
+                    }
+                }
+
+            }
+        }
+        stage('pull artifact') {
+            steps {
+                script {
+                    //getArtifacts("mirror-openshift-release", "latest-${OCP_RELEASE}-build.txt")
+                    //getArtifacts("powervm/poll-powervc-images", "cicd-rhcos-${OCP_RELEASE}.latest.txt")
+                    getArtifacts("powervm/poll-powervc-images", "cicd-rhel-${REDHAT_RELEASE}.latest.txt")
+                }
+            }
+        }
+        //Checkout the installer git repo
+        stage('Prepare Terraform Template') {
+            steps {
+                script {
+                    ansiColor('xterm') {
+                        echo ""
+                    }
+                    try
+                    {
+                        gbToMb()
+                        pullSecret()
+                        env.OPENSHIFT_IMAGE = ""
+                        if (env.BUILD?.trim()) {
+                            if (!env.BUILD.contains('quay')) {
+                                env.OPENSHIFT_IMAGE  = "docker-na.artifactory.swg-devops.com/sys-powercloud-docker-local/ocp-ppc64le/release-ppc64le:${env.BUILD}"
+                                // sh '''
+                                //     nerdctl login -u ${ARTIFACTORY_USER} -p ${ARTIFACTORY_TOKEN} docker-na.artifactory.swg-devops.com/sys-powercloud-docker-local
+                                //     nerdctl pull ${OPENSHIFT_IMAGE}
+                                //     if [ $? -ne 0 ]; then
+                                //         echo "${OPENSHIFT_IMAGE}  not found"
+                                //         exit 1
+                                //     fi
+                                //     nerdctl rmi ${OPENSHIFT_IMAGE}
+                                // '''
+                            }
+                            else {
+                               env.OPENSHIFT_IMAGE=env.BUILD
+                            }
+                        }
+                        else {
+                            echo "CURRENT build is empty"
+                        }
+
+                        env.RHCOS_IMAGE_NAME = "cicd-empty-image"
+                        env.RHCOS_IMAGE_ID = "c8a979a0-7707-4d23-b5b6-419b953676d1"
+                        if (fileExists("deploy/artifactory/cicd-rhel-${REDHAT_RELEASE}.latest.txt")) {
+                            env.BASTION_IMAGE = readFile "deploy/artifactory/cicd-rhel-${REDHAT_RELEASE}.latest.txt"
+                            env.BASTION_IMAGE_NAME = env.BASTION_IMAGE.split()[0].trim()
+                            env.BASTION_IMAGE_ID = env.BASTION_IMAGE.split()[1].trim()
+                        }
+                        else {
+                            echo "cicd-rhel-${REDHAT_RELEASE}.latest.txt file does not exist. Please check poll-powervc-images job"
+                            throw err
+                        }
+                        currentBuild.description = "OCP: ${OCP_RELEASE}, Multi: ${ENABLE_MULTI}, InstallType: ${AI_INSTALL_TYPE}, ClusterType: ${AI_CLUSTER_TYPE}"
+                        createTemplate(env.OS_AUTH_URL, env.MASTER_VCPUS , "${MASTER_MEMORY_MB}", env.MASTER_PROCESSORS, env.MASTER_TEMPLATE)
+                        createTemplate(env.OS_AUTH_URL, env.WORKER_VCPUS , "${WORKER_MEMORY_MB}", env.WORKER_PROCESSORS, env.WORKER_TEMPLATE)
+                        createTemplate(env.OS_AUTH_URL, env.BASTION_VCPUS , "${BASTION_MEMORY_MB}", env.BASTION_PROCESSORS, env.BASTION_TEMPLATE)
+                        createTemplate(env.OS_AUTH_URL, env.BOOTSTRAP_VCPUS , "${BOOTSTRAP_MEMORY_MB}", env.BOOTSTRAP_PROCESSORS, env.BOOTSTRAP_TEMPLATE)
+                    }
+                    catch (err)
+                    {
+                        echo 'Error ! Template preparation failed !'
+                        env.FAILED_STAGE=env.STAGE_NAME
+                        throw err
+                    }
+                }
+            }
+        }
+        stage('Initialize Environment') {
+            steps {
+                initializeEnvironment()
+            }
+        }
+        stage('Setup Terraform Plugin') {
+            steps {
+                setupTerraformPlugin()
+            }
+        }
+        stage('Deploy OCP Cluster') {
+            steps {
+                deployCluster()
+            }
+        }
+        stage('Run crontab script for capturing outputs of multiple commands') {
+            steps {
+                crontabCommandCaptureScript()
+            }
+        }
+        stage('Setup Kubectl') {
+            steps {
+                setupKubeconfigOcp4()
+            }
+        }
+        stage('Validate CO status') {
+            steps {
+                validateCoStatus()
+            }
+        }
+        stage('Setup and run ansible extra'){
+            when { expression { return env.ENABLE_E2E == "true"; } }
+            steps {
+                setupAndRunE2e()
+            }
+        }
+        stage('Validate CO status post e2e') {
+            steps {
+                validateCoStatus()
+            }
+        }
+        stage('Waiting to timeout') {
+            steps {
+                script {
+                    ansiColor('xterm') {
+                        echo ""
+                    }
+                    try {
+                        TIMEOUT_MIN = TIMEOUT.toInteger()
+                        if ( TIMEOUT_MIN != 0 )
+                        {
+                            TIMEOUT_SEC=TIMEOUT_MIN*60
+                        }
+                        echo "HOLDING THE CLUSTER TEAR DOWN FOR ${TIMEOUT_MIN} MINUTES"
+                        sleep TIMEOUT_SEC
+                        }
+                    catch (err) {
+                        echo 'Error ! Timeout stage failed!'
+                        env.FAILED_STAGE=env.STAGE_NAME
+                        throw err
+                    }
+                }
+            }
+        }
+        stage('Validate CO status post e2e and timeout') {
+            steps {
+                validateCoStatus()
+            }
+        }
+    }
+    post {
+        always {
+            archiveAllArtifacts("deploy/conformance-parallel-out.txt.tar.gz", "deploy/summary.txt", "deploy/vars.tfvars",
+                "cpu-pre.pprof", "heap-pre.pprof", "prometheus.tar.gz", "deploy/cron.log", "must-gather.tar.gz", "deploy/kdump.tar.gz")
+            cleanupOcp4Cluster()
+            checkInfraError()
+            script {
+                if ( env.ENABLE_E2E == "true" ) {
+                    processE2eResults()
+                }
+            }
+            //notifyBySlack(currentBuild.result, env.MESSAGE)
+            cleanWs()
+        }
+    }
+}

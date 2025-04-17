@@ -5,23 +5,34 @@ if [ -d ${WORKSPACE}/deploy ];then
 else
     exit 1
 fi
+# Try to match any tfvars file with the target prefix
+TFVARS_FILE=$(ls ${WORKSPACE}/deploy/.${TARGET}*.tfvars 2>/dev/null | head -n 1)
+
+if [ -z "${TFVARS_FILE}" ]; then
+    echo "No matching tfvars found for target: ${TARGET}, trying default"
+    TFVARS_FILE="${WORKSPACE}/deploy/.deploy-openshift4-powervc.tfvars"
+else
+    base_filename=$(basename "${TFVARS_FILE}")
+    # Extract the part like 'deploy-openshift4-powervc-abi' or 'deploy-openshift4-powervc-ai'
+    L_TARGET=$(echo "$base_filename" | sed -n 's/\(deploy-openshift4-powervc-[a-z]*\)\.tfvars/\1/p')
+fi
 # Capturing Terraform template
-if [ ! -f ${WORKSPACE}/deploy/.${TARGET}.tfvars ]; then
-    echo "${WORKSPACE}/deploy/.${TARGET}.tfvars not found!"
+if [ ! -f "${TFVARS_FILE}" ]; then
+    echo "${TFVARS_FILE} not found!"
     exit 1
 else
-    cp ${WORKSPACE}/deploy/.${TARGET}.tfvars ${TARGET}.tfvars
-    sed -i "s|password.*=.*$|password = ************|g" ${TARGET}.tfvars
-    sed -i "s|user_name.*=.*$|user_name = ************|g" ${TARGET}.tfvars
-    sed -i "s|auth_url.*=.*$|auth_url = ************|g" ${TARGET}.tfvars
-    sed -i "s|rhel_subscription_password.*=.*$|rhel_subscription_password = ************|g" ${TARGET}.tfvars
-    sed -i "s|rhel_subscription_username.*=.*$|rhel_subscription_username = ************|g" ${TARGET}.tfvars
-    sed -i "s|github_token.*=.*$|github_token = ************|g" ${TARGET}.tfvars
-    sed -i "s|github_username.*=.*$|github_username = ************|g" ${TARGET}.tfvars
-    sed -i "s|ibmcloud_api_key.*=.*$|ibmcloud_api_key = ************|g" ${TARGET}.tfvars
-    sed -i "s|proxy.*=.*$|proxy = ************|g" ${TARGET}.tfvars
-    cp ${TARGET}.tfvars vars.tfvars
-    tar -czvf ${WORKSPACE}/deploy/logs.tar.gz ${WORKSPACE}/deploy/.${TARGET}/logs
+    cp "${TFVARS_FILE}" ${L_TARGET}.tfvars
+    sed -i "s|password.*=.*$|password = ************|g" ${L_TARGET}.tfvars
+    sed -i "s|user_name.*=.*$|user_name = ************|g" ${L_TARGET}.tfvars
+    sed -i "s|auth_url.*=.*$|auth_url = ************|g" ${L_TARGET}.tfvars
+    sed -i "s|rhel_subscription_password.*=.*$|rhel_subscription_password = ************|g" ${L_TARGET}.tfvars
+    sed -i "s|rhel_subscription_username.*=.*$|rhel_subscription_username = ************|g" ${L_TARGET}.tfvars
+    sed -i "s|github_token.*=.*$|github_token = ************|g" ${L_TARGET}.tfvars
+    sed -i "s|github_username.*=.*$|github_username = ************|g" ${L_TARGET}.tfvars
+    sed -i "s|ibmcloud_api_key.*=.*$|ibmcloud_api_key = ************|g" ${L_TARGET}.tfvars
+    sed -i "s|proxy.*=.*$|proxy = ************|g" ${L_TARGET}.tfvars
+    cp ${L_TARGET}.tfvars vars.tfvars
+    tar -czvf ${WORKSPACE}/deploy/logs.tar.gz ${WORKSPACE}/deploy/.${L_TARGET}/logs
 fi
 if [ ! -z "${BASTION_IP}" ]; then
     ssh -q -i id_rsa -o StrictHostKeyChecking=no root@${BASTION_IP} exit
