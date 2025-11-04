@@ -271,9 +271,9 @@ pipeline {
                 try{
                     sh '''
                         echo "Copying the test output results ......"
-                        cp -r /host/out-* ${WORKSPACE}/deploy
+                        cp -rf /host/out-* ${WORKSPACE}/deploy
                         cp -rf /host/*.txt ${WORKSPACE}/deploy
-                        cp -rf /host/input.json ${WORKSPACE}/deploy
+                        cp /host/input.json ${WORKSPACE}/deploy
                     '''
                     archiveAllArtifacts("deploy/conformance-parallel-out.txt.tar.gz", "deploy/summary.txt", "deploy/vars.tfvars",
                         "cpu-pre.pprof", "heap-pre.pprof", "prometheus.tar.gz", "deploy/cron.log", "deploy/${SUITE2RUN}-*.txt", "deploy/input.json", "deploy/out-*/cypress/*")
