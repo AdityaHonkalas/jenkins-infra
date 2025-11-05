@@ -101,12 +101,12 @@ pipeline {
                         env.GOLANG_TARBALL = "https://golang.org/dl/go1.22.0.linux-ppc64le.tar.gz"
                     }
                     else {
-                        env.REDHAT_RELEASE = "9.4"
-                        env.GOLANG_TARBALL = "https://golang.org/dl/go1.22.4.linux-ppc64le.tar.gz"
+                        env.REDHAT_RELEASE = "9.6"
+                        env.GOLANG_TARBALL = "https://golang.org/dl/go1.24.9.linux-ppc64le.tar.gz"
                     }
 
-                    // Added a condition for RHCOS_RELEASE to be set to 4.19 for OCP 4.20
-                    if (env.OCP_RELEASE == "4.20"){
+                    // Added a condition for RHCOS_RELEASE to be set to 4.19 for OCP above 4.19
+                    if (env.OCP_RELEASE == "4.20" || env.OCP_RELEASE == "4.21"){
                         env.RHCOS_RELEASE = "4.19"
                     }
                     else {
