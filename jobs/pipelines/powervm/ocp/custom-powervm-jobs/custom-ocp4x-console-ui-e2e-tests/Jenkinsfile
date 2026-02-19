@@ -106,7 +106,7 @@ pipeline {
                     }
 
                     // Added a condition for RHCOS_RELEASE to be set to 4.19 for OCP above 4.19
-                    if (env.OCP_RELEASE == "4.20" || env.OCP_RELEASE == "4.21"){
+                    if (env.OCP_RELEASE == "4.20" || env.OCP_RELEASE == "4.21" || env.OCP_RELEASE == "4.22"){
                         env.RHCOS_RELEASE = "4.19"
                     }
                     else {
@@ -229,7 +229,7 @@ pipeline {
         // Setup for console UI e2e tests run
         stage('Setup and run console UI e2e tests.') {
             steps {
-                sh '${WORKSPACE}/scripts/setup-console-e2e.sh'
+                sh '${WORKSPACE}/scripts/console-e2e/setup-console-e2e.sh'
             }
         }
         

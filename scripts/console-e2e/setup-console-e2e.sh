@@ -99,7 +99,7 @@ CLUSTER_HOST_ENTRY=${BASTION_IP}" "${OCP_ROUTES}
 echo "Step-3: Adding cluster host entry to /etc/hosts file ..."
 echo $CLUSTER_HOST_ENTRY | tee -a /etc/hosts
 
-# Trigger the console-e2e.sh from the / path
+# Trigger the console-e2e.sh from the ${WORKSPACE}/scripts/ path
 echo "Step-4: Trigger the /console-e2e.sh to run console UI e2e tests:"
-source /console-e2e.sh
+source ${WORKSPACE}/scripts/console-e2e/console-e2e.sh
 
