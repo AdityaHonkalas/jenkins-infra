@@ -130,10 +130,10 @@ if [ -z $(jq -r .idp $PARAMSJ) ]; then
   printInfo "WARNING: IDP not found in the input parameters, using default kubeadmin."
   export CYPRESS_LOGIN_IDP="kube:admin"
   export CYPRESS_LOGIN_USERS="kubeadmin:${OCADMPW}"
-elif [ -n $(jq -r .idp_user $PARAMSJ) && -n $(jq -r .idp_password $PARAMSJ)]
+elif [ -n "$(jq -r .idp_user $PARAMSJ)" ] && [ -n "$(jq -r .idp_password $PARAMSJ)" ]; then
   export CYPRESS_LOGIN_IDP=$(jq -r .idp $PARAMSJ)
-  export CYPRESS_LOGIN_USERS=$(jq -r .idp_user $PARAMSJ)":"$(jq -r .idp_password)
-  printInfo "Configured $(jq -r .idp) IDP for multi-user auth test"
+  export CYPRESS_LOGIN_USERS=$(jq -r .idp_user $PARAMSJ)":"$(jq -r .idp_password $PARAMSJ)
+  printInfo "Configured $(jq -r .idp $PARAMSJ) IDP for multi-user auth test"
 fi
 
 # Check if kubeconfig is on the path $HOSTDIR/kubeconfig
@@ -149,6 +149,8 @@ NOW=$(date +%Y%m%d-%H%M)
 #echo "NOW=$NOW"
 ROOTDIR=/root/console
 REFRESH=$(jq -r .refresh $PARAMSJ)
+
+[ -z $REFRESH ] && REFRESH=false && printInfo "No refresh param found in input.json, defaulting to false"
 
 # Switch to the /root dir if not already there
 [ $pwd != '/root' ] && cd /root

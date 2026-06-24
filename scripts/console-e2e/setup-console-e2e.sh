@@ -84,7 +84,8 @@ cat > $HOSTDIR/input.json <<EOF
   "suite": "${SUITE2RUN}",
   "browser": "electron",
   "jtimeout": 180000,
-  "retries": "${RETRIES}"
+  "retries": "${RETRIES}",
+  "ocp_version": "${OCP_RELEASE}"
 }
 EOF
 
