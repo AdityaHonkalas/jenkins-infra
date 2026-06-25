@@ -3,7 +3,7 @@
 pipeline {
     agent {
         docker {
-            image 'quay.io/rh_ee_ahonkala/console-e2e-ci:v25.07.25'
+            image 'quay.io/rh_ee_ahonkala/console-e2e-ci:v22.06.26'
             args '-v /etc/resolv.conf:/etc/resolv.conf -v /run/containerd/containerd.sock:/run/containerd/containerd.sock'
             label 'jump-vpc-x86_64'
         }
@@ -109,12 +109,12 @@ pipeline {
                     if (env.OCP_RELEASE == "4.19" || env.OCP_RELEASE == "4.21"){
                         env.RHCOS_RELEASE = "4.19"
                     }
-                    else if (env.OCP_RELEASE == "4.22"){
+                    else if (env.OCP_RELEASE == "4.22" || env.OCP_RELEASE == "5.0"){
                         env.RHCOS_RELEASE = "9.8"
                     }
-                    else if (env.OCP_RELEASE == "5.0"){
-                        env.RHCOS_RELEASE = "10.2"
-                    }
+                    // else if (env.OCP_RELEASE == "5.0"){
+                    //     env.RHCOS_RELEASE = "10.2"
+                    // }
                     else {
                         env.RHCOS_RELEASE = "${env.OCP_RELEASE}"
                     }
