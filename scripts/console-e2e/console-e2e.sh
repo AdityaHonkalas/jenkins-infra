@@ -1,5 +1,5 @@
-#!/bin/sh
-# Note: Cypress seems to need more memory to run, as it executes more and more tests. If running Docker, `--shm-size 4g` (at least) recommended.
+#!/bin/bash
+# Note: Playwright console UI e2e tests execution script. If running Docker/Podman, `--shm-size 4g` (at least) recommended.
 
 # input parameters in input.json file
 # {
@@ -8,9 +8,9 @@
 #   "idp": "kube:admin",
 #   "idp_user": "user1",
 #   "idp_password": "keypass123",
-#   "driver": "Cypress",
-#   "suite": "Network_Observability",
-#   "browser": "Chrome",
+#   "driver": "Playwright",
+#   "suite": "console",
+#   "browser": "chromium",
 #   "jtimeout": 180000,
 #   "retries": ""
 # }
@@ -36,75 +36,115 @@ function printInfo() {
 }
 
 # $1=(optional) test suite name to run
-function run_cypress_tests() {
-  test "$DRIVER" == "protractor" && return #NEEDSATTN
+function run_playwright_tests() {
   local RC=0
 
   if [[ ! $PWD = '/root/console/frontend' ]]; then
     cd $ROOTDIR"/frontend"
   fi
 
-  if [ "$1" == 'e2e' -o "$1" == 'dvt' -o -z "$1" ]; then
-    printInfo "Starting all Cypress tests" 1
-    ./integration-tests/test-cypress.sh -p console -h true | tee $HOSTDIR"/${SUITE2RUN}-${NOW}.txt"
-  else # specific suite
-    #TEST_SUITE=$(echo $SUITE2RUN | cut -d '/' -f 3 | cut -d '.' -f 1)
-    printInfo "Starting Cypress for '$SUITE2RUN'" 1
-    ./integration-tests/test-cypress.sh -p console -s "${SUITE2RUN}" -h true | tee $HOSTDIR"/${SUITE2RUN}-${NOW}.txt"
+  # Install chromium before running the tests
+  yarn playwright install chromium 
+
+  if [ "$1" == 'e2e' -o "$1" == 'console' -o -z "$1" ]; then
+    printInfo "Starting Playwright tests for console suite" 1
+    ./integration-tests/test-playwright.sh -p console -h true | tee $HOSTDIR"/${SUITE2RUN}-${NOW}.txt"
+    RC=${PIPESTATUS[0]}
+  else # specific spec or suite
+    printInfo "Starting Playwright for '$SUITE2RUN'" 1
+    ./integration-tests/test-playwright.sh -p console -s "${SUITE2RUN}" -h true | tee $HOSTDIR"/${SUITE2RUN}-${NOW}.txt"
+    RC=${PIPESTATUS[0]}
   fi
-  test $? -eq 0 || RC=1
+
   local RUN=1
   if [ $RC -ne 0 -a $RETRYMAX -ne 0 ]; then
     while [ $RC -ne 0 -a $RUN -le $RETRYMAX ]; do
-      rerun_cypress_tests $(date +%s) $RUN
-      test $? -eq 0 && RC=0 || RUN=`expr $RUN + 1`
+      rerun_playwright_tests $(date +%s) $RUN
+      RC=$?
+      RUN=`expr $RUN + 1`
     done
   fi
-  test $RC -eq 0 && echo "INFO: Cypress tests passed!!" || echo "WARNING: Cypress tests failed :-("
-  report_cypress_rerun
+
+  test $RC -eq 0 && echo "INFO: Playwright tests passed!!" || echo "WARNING: Playwright tests failed :-("
+  report_playwright_rerun
   return $RC
 }
 
-# $1=epoch (just to be unique across runs inside the same container), $2=next run#
-function rerun_cypress_tests() {
-  mkdir $OUTDIR/cypress-$1; mv $OUTDIR/cypress $OUTDIR/cypress_report*.json $OUTDIR/cypress-$1
+# $1=epoch (unique across runs), $2=next run#
+function rerun_playwright_tests() {
+  local EPOCH=$1
+  local RUN_NUM=$2
+  local BACKUP_DIR="$OUTDIR/playwright-run-$EPOCH"
+  mkdir -p "$BACKUP_DIR"
+
+  # Backup previous reports/results
+  [ -d "$PW_DIR/test-results" ] && cp -r "$PW_DIR/test-results" "$BACKUP_DIR/"
+  [ -d "$PW_DIR/playwright-report" ] && cp -r "$PW_DIR/playwright-report" "$BACKUP_DIR/"
+  [ -d "$PW_DIR/gui_test_screenshots" ] && cp -r "$PW_DIR/gui_test_screenshots" "$BACKUP_DIR/"
+  ls $PW_DIR/junit*.xml >/dev/null 2>&1 && cp $PW_DIR/junit*.xml "$BACKUP_DIR/"
+
   FAILED_SPECS=`mktemp`
-  jq -r '.results[] | {file: .file, test: {title: (.suites[0].tests[]          | .title), result: (.suites[0].tests[]          | .state)}} | select(.test.result|test("^fail")) | .file' $OUTDIR/cypress-$1/*.json >  $FAILED_SPECS
-  jq -r '.results[] | {file: .file, test: {title: (.suites[0].suites[].tests[] | .title), result: (.suites[0].suites[].tests[] | .state)}} | select(.test.result|test("^fail")) | .file' $OUTDIR/cypress-$1/*.json >> $FAILED_SPECS
+
+  # 1. Extract failed specs from Playwright JUnit XML reports if available
+  if ls $PW_DIR/junit*.xml >/dev/null 2>&1; then
+    grep -l '<failure' $PW_DIR/junit*.xml | while read JUNIT_FILE; do
+      grep -o 'file="[^"]*"' "$JUNIT_FILE" | sed 's/file="//;s/"//' >> $FAILED_SPECS
+    done
+  fi
+
+  # 2. Extract failed specs from Playwright JSON report if available
+  if ls $PW_DIR/playwright-report/*.json >/dev/null 2>&1; then
+    jq -r '.. | objects | select(.status? == "unexpected" or .status? == "failed") | .file? // empty' $PW_DIR/playwright-report/*.json >> $FAILED_SPECS
+  fi
+
+  # 3. Fallback: Parse failed spec paths from execution log file if reports were not generated
+  if [ ! -s $FAILED_SPECS ] && [ -f "$HOSTDIR/${SUITE2RUN}-${NOW}.txt" ]; then
+    grep -E '✘|FAIL|failed' "$HOSTDIR/${SUITE2RUN}-${NOW}.txt" | grep -oE '[a-zA-Z0-9_\/\.\-]+\.spec\.ts' >> $FAILED_SPECS
+  fi
+
   local RC=0
+  local FOUND_FAILURES=false
+
   for SPEC in $(cat $FAILED_SPECS | sort | uniq); do
-    printInfo "Starting Cypress rerun for $SPEC (#$2)" 1
-    ./integration-tests/test-cypress.sh -p console -s $SPEC -h true | tee $HOSTDIR"/$(echo $SPEC | cut -d '/' -f 3 | cut -d '.' -f 1)-${RC}-${NOW}.txt"
-    CYRC=$?
-    test $CYRC -eq 0 && echo "INFO: Cypress rerun for $SPEC passed!! :-)" || echo "WARNING: Cypress rerun for $SPEC failed :-("
-    test $CYRC -ne 0 && RC=1
+    [ -z "$SPEC" ] && continue
+    FOUND_FAILURES=true
+    SPEC_NAME=$(basename $SPEC .spec.ts)
+    printInfo "Starting Playwright rerun for $SPEC (#$RUN_NUM)" 1
+    ./integration-tests/test-playwright.sh -p console -s "$SPEC" -h true | tee $HOSTDIR"/${SPEC_NAME}-rerun${RUN_NUM}-${NOW}.txt"
+    PRC=${PIPESTATUS[0]}
+    if [ $PRC -eq 0 ]; then
+      echo "INFO: Playwright rerun for $SPEC passed!! :-)"
+    else
+      echo "WARNING: Playwright rerun for $SPEC failed :-("
+      RC=1
+    fi
   done
+
   rm -f $FAILED_SPECS
+
+  # If failures occurred but no specs could be isolated, rerun the suite
+  if [ "$FOUND_FAILURES" = false ]; then
+    printInfo "No isolated spec files identified, re-running full suite '$SUITE2RUN' (#$RUN_NUM)" 1
+    if [ "$SUITE2RUN" == 'e2e' -o "$SUITE2RUN" == 'console' -o -z "$SUITE2RUN" ]; then
+      ./integration-tests/test-playwright.sh -p console -h true | tee $HOSTDIR"/${SUITE2RUN}-rerun${RUN_NUM}-${NOW}.txt"
+      RC=${PIPESTATUS[0]}
+    else
+      ./integration-tests/test-playwright.sh -p console -s "${SUITE2RUN}" -h true | tee $HOSTDIR"/${SUITE2RUN}-rerun${RUN_NUM}-${NOW}.txt"
+      RC=${PIPESTATUS[0]}
+    fi
+  fi
+
   return $RC
 }
 
-function report_cypress_rerun() {
-  printInfo "Failed Cypress Suite(s)" 2
-  VERDICT_C=0
-  SUITES=`mktemp`
-  jq -r '.results[0].suites[0].title' $OUTDIR/cypress_report*.json | egrep -v 'null|Skipping' | sort | uniq > $SUITES
-  while read SUITE; do
-    grep -h testsuite $OUTDIR/junit_cypress-*.xml | egrep -v 'Root Suite|/testsuite|Mocha Tests' | sort | grep "$SUITE" | tail -1 | grep -v 'failures="0"'
-    VERDICT_C=`expr $VERDICT_C + $?`
-  done < $SUITES
-  rm -f $SUITES
+function report_playwright_rerun() {
+  printInfo "Playwright Test Execution Summary" 2
+  if ls $PW_DIR/junit*.xml >/dev/null 2>&1; then
+    grep -h '<testsuite' $PW_DIR/junit*.xml | egrep -v 'failures="0" errors="0"' || echo "All testsuites passed in the latest run."
+  elif ls $PW_DIR/playwright-report/*.json >/dev/null 2>&1; then
+    jq -r '.stats // empty' $PW_DIR/playwright-report/*.json
+  fi
   printInfo " " 2
-}
-
-# ------------------- Not required ---------------
-function adjust_for_dvt() {
-  printInfo "Trimming for DVT..."
-  SUITE2RUN=dashboards #NEEDSATTN
-  CYDIR=frontend/packages/integration-tests-cypress
-  mv $CYDIR/cypress.json $CYDIR/cypress.json~ ; jq '.video=false' $CYDIR/cypress.json~ > $CYDIR/cypress.json
-  mv $CYDIR/tests/crud/annotations.spec.ts \
-     $CYDIR/tests/i18n/* \
-     /tmp/
 }
 
 HOSTDIR=/host #NEEDSATTN
@@ -128,17 +168,24 @@ fi
 # Check for IDP user other than kubeadmin
 if [ -z $(jq -r .idp $PARAMSJ) ]; then
   printInfo "WARNING: IDP not found in the input parameters, using default kubeadmin."
+  export PLAYWRIGHT_LOGIN_IDP="kube:admin"
+  export PLAYWRIGHT_LOGIN_USERS="kubeadmin:${OCADMPW}"
   export CYPRESS_LOGIN_IDP="kube:admin"
   export CYPRESS_LOGIN_USERS="kubeadmin:${OCADMPW}"
 elif [ -n "$(jq -r .idp_user $PARAMSJ)" ] && [ -n "$(jq -r .idp_password $PARAMSJ)" ]; then
-  export CYPRESS_LOGIN_IDP=$(jq -r .idp $PARAMSJ)
-  export CYPRESS_LOGIN_USERS=$(jq -r .idp_user $PARAMSJ)":"$(jq -r .idp_password $PARAMSJ)
-  printInfo "Configured $(jq -r .idp $PARAMSJ) IDP for multi-user auth test"
+  IDP_VAL=$(jq -r .idp $PARAMSJ)
+  USERS_VAL=$(jq -r .idp_user $PARAMSJ)":"$(jq -r .idp_password $PARAMSJ)
+  export PLAYWRIGHT_LOGIN_IDP="$IDP_VAL"
+  export PLAYWRIGHT_LOGIN_USERS="$USERS_VAL"
+  export CYPRESS_LOGIN_IDP="$IDP_VAL"
+  export CYPRESS_LOGIN_USERS="$USERS_VAL"
+  printInfo "Configured $IDP_VAL IDP for multi-user auth test"
 fi
 
 # Check if kubeconfig is on the path $HOSTDIR/kubeconfig
 if [ -e $HOSTDIR/kubeconfig ]; then
   export KUBECONFIG=$HOSTDIR/kubeconfig
+  export PLAYWRIGHT_KUBECONFIG_PATH=$HOSTDIR/kubeconfig
   export CYPRESS_KUBECONFIG_PATH=$HOSTDIR/kubeconfig
 else
   printInfo "ERROR: No kubeconfig provided -- aborting...."
@@ -146,14 +193,13 @@ else
 fi
 
 NOW=$(date +%Y%m%d-%H%M)
-#echo "NOW=$NOW"
 ROOTDIR=/root/console
 REFRESH=$(jq -r .refresh $PARAMSJ)
 
 [ -z $REFRESH ] && REFRESH=false && printInfo "No refresh param found in input.json, defaulting to false"
 
 # Switch to the /root dir if not already there
-[ $pwd != '/root' ] && cd /root
+[ "$PWD" != '/root' ] && cd /root
 
 printInfo "Checking for existing 'console' directory at $ROOTDIR"
 echo ""
@@ -165,7 +211,7 @@ if [ ! -d $ROOTDIR -o "$REFRESH" == "true" ]; then
   else
     printInfo "Building latest console code from Git"
     git clone https://github.com/openshift/console.git
-    [ -n $(jq -r .ocp_version $PARAMSJ) ] && git checkout $(jq -r .ocp_version $PARAMSJ) || printInfo "OCP version is not found in the input.json, builing code with main branch." && git checkout main
+    [ -n "$(jq -r .ocp_version $PARAMSJ)" ] && git checkout $(jq -r .ocp_version $PARAMSJ) || printInfo "OCP version is not found in the input.json, building code with main branch." && git checkout main
     cd $ROOTDIR
     ./build.sh
     [ $? -ne 0 ] && git checkout -- frontend/yarn.lock ; ./build.sh
@@ -184,55 +230,62 @@ printInfo "Priming runtime env"
 
 oc login -u kubeadmin -p $OCADMPW $OAPIURL --insecure-skip-tls-verify
 
-export BRIDGE_BASE_ADDRESS="$(oc get consoles.config.openshift.io cluster -o jsonpath='{.status.consoleURL}')"
+CONSOLE_URL="$(oc get consoles.config.openshift.io cluster -o jsonpath='{.status.consoleURL}')"
+export BRIDGE_BASE_ADDRESS="$CONSOLE_URL"
+export WEB_CONSOLE_URL="$CONSOLE_URL"
 export BRIDGE_KUBEADMIN_PASSWORD=$OCADMPW
-
-export CHROME_VERSION=$(google-chrome --version | sed 's/Google Chrome //')
-
-# FAILFAST=$(jq -r .failfast $PARAMSJ)
-# [ "$FAILFAST" != "yes" -a "$FAILFAST" != "true" ] && export NO_FAILFAST=false
 
 if [ -z "$BRIDGE_E2E_BROWSER_NAME" ]; then
   BROWSER=$(jq -r .browser $PARAMSJ)
-  [ -n "$BROWSER" ] && export BRIDGE_E2E_BROWSER_NAME=$BROWSER
+  [ -n "$BROWSER" -a "$BROWSER" != "null" ] && export BRIDGE_E2E_BROWSER_NAME=$BROWSER || export BRIDGE_E2E_BROWSER_NAME="chromium"
 fi
 
 JASMINETO=$(jq -r .jtimeout $PARAMSJ)
-[ -n "$JASMINETO" ] && export BRIDGE_JASMINE_TIMEOUT=$JASMINETO
+[ -n "$JASMINETO" -a "$JASMINETO" != "null" ] && export BRIDGE_JASMINE_TIMEOUT=$JASMINETO
 
 DRIVER=$(jq -r .driver $PARAMSJ)
 
 SUITE2RUN=$(jq -r .suite $PARAMSJ)
-[ -z "$SUITE2RUN" ] && SUITE2RUN=e2e #NEEDSATTN
+[ -z "$SUITE2RUN" -o "$SUITE2RUN" == "null" ] && SUITE2RUN=console
 
 RETRYMAX=$(jq -r .retries $PARAMSJ)
-[ -z "$RETRYMAX" -o "$RETRYMAX" == "null" ] && RETRYMAX=2 #NEEDSATTN
+[ -z "$RETRYMAX" -o "$RETRYMAX" == "null" ] && RETRYMAX=2
 
-# export CYPRESS_PLUGIN_PULL_SPEC=quay.io/miyamoto_h/console-demo-plugin:latest
+export PLAYWRIGHT_PLUGIN_PULL_SPEC=quay.io/rh_ee_ahonkala/console-demo-plugin:ppc64le
 export CYPRESS_PLUGIN_PULL_SPEC=quay.io/rh_ee_ahonkala/console-demo-plugin:ppc64le
 
-OUTDIR=${ROOTDIR}"/frontend/gui_test_screenshots"
-VERDICT_P=1 # did Protractor tests pass(=0) after all?
-VERDICT_C=1 # did Cypress    tests pass(=0) after all?
+PW_DIR="${ROOTDIR}/frontend/packages/integration-tests-playwright"
+OUTDIR="${ROOTDIR}/frontend/gui_test_screenshots"
+mkdir -p "$OUTDIR"
 
-echo ""
-if [ "$SUITE2RUN" == 'e2e' -o "$SUITE2RUN" == 'dvt' ]; then
-  test "$SUITE2RUN" == 'dvt' && adjust_for_dvt
-  printInfo "Kicking off available test suites"
-  run_cypress_tests $SUITE2RUN
-else
-  printInfo "Kicking off test suite: $SUITE2RUN"
-  run_netobserv_cypress_tests $SUITE2RUN
+# Install Playwright browser binaries if not present
+if [ -d "$ROOTDIR/frontend" ]; then
+  cd "$ROOTDIR/frontend"
+  if command -v yarn >/dev/null 2>&1; then
+    printInfo "Ensuring Playwright browser binaries are installed"
+    yarn playwright install || npx playwright install || true
+  fi
 fi
 
-#echo "DEBUG: VERDICT_P=$VERDICT_P, VERDICT_C=$VERDICT_C"
+VERDICT=1
+
+echo ""
+printInfo "Kicking off Playwright test suite: $SUITE2RUN"
+run_playwright_tests "$SUITE2RUN"
+VERDICT=$?
 
 echo ""
 if [ -w $HOSTDIR ]; then
-  cp -r $OUTDIR $HOSTDIR/out-$NOW
-  printInfo "Copied output to directory: out-$NOW"
+  mkdir -p $HOSTDIR/out-$NOW
+  # Copy screenshots, reports, traces, and test-results
+  [ -d "$OUTDIR" ] && cp -r $OUTDIR $HOSTDIR/out-$NOW/
+  [ -d "$PW_DIR/test-results" ] && cp -r $PW_DIR/test-results $HOSTDIR/out-$NOW/
+  [ -d "$PW_DIR/playwright-report" ] && cp -r $PW_DIR/playwright-report $HOSTDIR/out-$NOW/
+  [ -d "$PW_DIR/gui_test_screenshots" ] && cp -r $PW_DIR/gui_test_screenshots $HOSTDIR/out-$NOW/
+  ls $PW_DIR/junit*.xml >/dev/null 2>&1 && cp $PW_DIR/junit*.xml $HOSTDIR/out-$NOW/
+  printInfo "Copied test outputs and artifacts to directory: $HOSTDIR/out-$NOW"
 else
   echo "WARN: $HOSTDIR not writeable, unable to copy output..."
 fi
 
-exit `expr $VERDICT_P + $VERDICT_C`
+exit $VERDICT

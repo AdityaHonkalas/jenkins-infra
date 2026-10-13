@@ -26,9 +26,12 @@ if [ $? -ne 0 ]; then
     exit $?
 fi
 
+# Install chromium browser if not present
+yarn playwright install chromium
+
 # create console tar gzip
 tar -czf console-built.tgz $CONSOLEDIR
-cp console-built.tgz $HOSTDIR 
+cp console-built.tgz $HOSTDIR
 
 # Extract the input parameters for console e2e test run
 echo "Step-2: Setting the input params for running the console UI e2e tests"
@@ -73,6 +76,7 @@ fi
 # create a input.json file
 echo "input.json params file: "
 
+# Change the default browser option to "chromium"
 cat > $HOSTDIR/input.json <<EOF
 {
   "apiurl": "${APIURL}",
@@ -82,7 +86,7 @@ cat > $HOSTDIR/input.json <<EOF
   "idp_password": "${HTPASS_PASSWD}",
   "driver": "${DRIVER}",
   "suite": "${SUITE2RUN}",
-  "browser": "electron",
+  "browser": "chromium",
   "jtimeout": 180000,
   "retries": "${RETRIES}",
   "ocp_version": "${OCP_RELEASE}"
