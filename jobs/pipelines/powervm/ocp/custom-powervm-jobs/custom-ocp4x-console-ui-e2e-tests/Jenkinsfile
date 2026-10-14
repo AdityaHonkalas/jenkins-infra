@@ -109,7 +109,7 @@ pipeline {
                     if (env.OCP_RELEASE == "4.19" || env.OCP_RELEASE == "4.21"){
                         env.RHCOS_RELEASE = "4.19"
                     }
-                    else if (env.OCP_RELEASE == "4.22" || env.OCP_RELEASE == "5.0"){
+                    else if (env.OCP_RELEASE == "4.22" || env.OCP_RELEASE == "5.0" || env.OCP_RELEASE == "5.1"){
                         env.RHCOS_RELEASE = "9.8"
                     }
                     // else if (env.OCP_RELEASE == "5.0"){
