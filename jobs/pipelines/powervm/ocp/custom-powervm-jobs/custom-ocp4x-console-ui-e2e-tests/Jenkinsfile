@@ -46,7 +46,7 @@ pipeline {
         HARDWARE_CHOSE = "P9"
         TARGET = "deploy-openshift4-powervc"
         TEMPLATE_FILE = ".${TARGET}.tfvars.template"
-        TERRAFORM_VER = "1.9.6"
+        TERRAFORM_VER = "1.11.4"
         POWERVS = false
         SCRIPT_DEPLOYMENT = false
         WAIT_FOR_DEBUG = "0"
@@ -81,35 +81,35 @@ pipeline {
                     env.SETUP_SQUID_PROXY = "true"
 
                     if (env.OCP_RELEASE == "4.12") {
-                        env.REDHAT_RELEASE = "9.2"
+                        env.REDHAT_RELEASE = "9.8"
                         env.GOLANG_TARBALL = "https://golang.org/dl/go1.18.6.linux-ppc64le.tar.gz"
                     }
                     else if (env.OCP_RELEASE == "4.13"){
-                        env.REDHAT_RELEASE = "9.2"
+                        env.REDHAT_RELEASE = "9.8"
                         env.GOLANG_TARBALL = "https://golang.org/dl/go1.19.linux-ppc64le.tar.gz"
                     }
-                    else if (env.OCP_RELEASE == "4.14") {
-                        env.REDHAT_RELEASE = "9.2"
-                        env.GOLANG_TARBALL = "https://golang.org/dl/go1.20.linux-ppc64le.tar.gz"
-                    }
-                    else if (env.OCP_RELEASE == "4.15") {
-                        env.REDHAT_RELEASE = "9.3"
-                        env.GOLANG_TARBALL = "https://golang.org/dl/go1.22.0.linux-ppc64le.tar.gz"
+                    else if (env.OCP_RELEASE == "4.14" || env.OCP_RELEASE == "4.15") {
+                        env.REDHAT_RELEASE = "9.8"
+                        env.GOLANG_TARBALL = "https://golang.org/dl/go1.22.linux-ppc64le.tar.gz"
                     }
                     else if (env.OCP_RELEASE == "4.16"){
                         env.REDHAT_RELEASE = "9.4"
                         env.GOLANG_TARBALL = "https://golang.org/dl/go1.22.0.linux-ppc64le.tar.gz"
                     }
+                    else if (env.OCP_RELEASE == "4.17" || env.OCP_RELEASE == "4.18"){
+                        env.REDHAT_RELEASE = "9.8"
+                        env.GOLANG_TARBALL = "https://golang.org/dl/go1.22.4.linux-ppc64le.tar.gz"
+                    }
                     else {
-                        env.REDHAT_RELEASE = "9.6"
+                        env.REDHAT_RELEASE = "9.8"
                         env.GOLANG_TARBALL = "https://golang.org/dl/go1.24.9.linux-ppc64le.tar.gz"
                     }
 
                     // Added a condition for RHCOS_RELEASE to be set to 4.19 for OCP above 4.19
-                    if (env.OCP_RELEASE == "4.19" || env.OCP_RELEASE == "4.21"){
+                    if (env.OCP_RELEASE == "4.20" || env.OCP_RELEASE == "4.21"){
                         env.RHCOS_RELEASE = "4.19"
-                    }
-                    else if (env.OCP_RELEASE == "4.22" || env.OCP_RELEASE == "5.0" || env.OCP_RELEASE == "5.1"){
+                    } // Set RHCOS_RELEASE = 9.8 for OCP >= 4.22 to 5.x
+                    else if (env.OCP_RELEASE == "4.22" || env.OCP_RELEASE == "4.23" || env.OCP_RELEASE == "5.0" || env.OCP_RELEASE == "5.1") {
                         env.RHCOS_RELEASE = "9.8"
                     }
                     // else if (env.OCP_RELEASE == "5.0"){
