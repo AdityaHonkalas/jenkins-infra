@@ -1,4 +1,4 @@
-@Library('jenkins-upstream-library') _
+@Library('jenkins-upstream-library@master') _
 
 pipeline {
     agent {
