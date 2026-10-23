@@ -26,8 +26,11 @@ if [ $? -ne 0 ]; then
     exit $?
 fi
 
-# Install chromium browser if not present
+# Install playwright using yarn with dependecies
+echo "Installing the playwright ........"
+cd $CONSOLEDIR/frontend
 yarn playwright install chromium
+cd $CONSOLEDIR
 
 # create console tar gzip
 tar -czf console-built.tgz $CONSOLEDIR

@@ -43,16 +43,16 @@ function run_playwright_tests() {
     cd $ROOTDIR"/frontend"
   fi
 
-  # Install chromium before running the tests
-  yarn playwright install chromium 
-
+  # Setting DEBUG=True for capturing html and screen rec videos
+  export DEBUG=true
+  
   if [ "$1" == 'e2e' -o "$1" == 'console' -o -z "$1" ]; then
     printInfo "Starting Playwright tests for console suite" 1
-    ./integration-tests/test-playwright.sh -p console -h true | tee $HOSTDIR"/${SUITE2RUN}-${NOW}.txt"
+    yarn test-playwright --project=console | tee $HOSTDIR"/${SUITE2RUN}-${NOW}.txt"
     RC=${PIPESTATUS[0]}
   else # specific spec or suite
     printInfo "Starting Playwright for '$SUITE2RUN'" 1
-    ./integration-tests/test-playwright.sh -p console -s "${SUITE2RUN}" -h true | tee $HOSTDIR"/${SUITE2RUN}-${NOW}.txt"
+    yarn test-playwright "${SUITE2RUN}" | tee $HOSTDIR"/${SUITE2RUN}-${NOW}.txt"
     RC=${PIPESTATUS[0]}
   fi
 
@@ -77,10 +77,13 @@ function rerun_playwright_tests() {
   local BACKUP_DIR="$OUTDIR/playwright-run-$EPOCH"
   mkdir -p "$BACKUP_DIR"
 
+  # Note: the screen rec videos will be saved only if DEBUG=True
   # Backup previous reports/results
   [ -d "$PW_DIR/test-results" ] && cp -r "$PW_DIR/test-results" "$BACKUP_DIR/"
   [ -d "$PW_DIR/playwright-report" ] && cp -r "$PW_DIR/playwright-report" "$BACKUP_DIR/"
-  [ -d "$PW_DIR/gui_test_screenshots" ] && cp -r "$PW_DIR/gui_test_screenshots" "$BACKUP_DIR/"
+  
+  # Old cypress change
+  # [ -d "$PW_DIR/gui_test_screenshots" ] && cp -r "$PW_DIR/gui_test_screenshots" "$BACKUP_DIR/"
   ls $PW_DIR/junit*.xml >/dev/null 2>&1 && cp $PW_DIR/junit*.xml "$BACKUP_DIR/"
 
   FAILED_SPECS=`mktemp`
@@ -110,7 +113,7 @@ function rerun_playwright_tests() {
     FOUND_FAILURES=true
     SPEC_NAME=$(basename $SPEC .spec.ts)
     printInfo "Starting Playwright rerun for $SPEC (#$RUN_NUM)" 1
-    ./integration-tests/test-playwright.sh -p console -s "$SPEC" -h true | tee $HOSTDIR"/${SPEC_NAME}-rerun${RUN_NUM}-${NOW}.txt"
+    yarn test-playwright "$SPEC" | tee $HOSTDIR"/${SPEC_NAME}-rerun${RUN_NUM}-${NOW}.txt"
     PRC=${PIPESTATUS[0]}
     if [ $PRC -eq 0 ]; then
       echo "INFO: Playwright rerun for $SPEC passed!! :-)"
@@ -122,14 +125,14 @@ function rerun_playwright_tests() {
 
   rm -f $FAILED_SPECS
 
-  # If failures occurred but no specs could be isolated, rerun the suite
+  # If failures occurred but no specs could be isolated, rerun the entire suite
   if [ "$FOUND_FAILURES" = false ]; then
     printInfo "No isolated spec files identified, re-running full suite '$SUITE2RUN' (#$RUN_NUM)" 1
     if [ "$SUITE2RUN" == 'e2e' -o "$SUITE2RUN" == 'console' -o -z "$SUITE2RUN" ]; then
-      ./integration-tests/test-playwright.sh -p console -h true | tee $HOSTDIR"/${SUITE2RUN}-rerun${RUN_NUM}-${NOW}.txt"
+      yarn test-playwright --project console | tee $HOSTDIR"/${SUITE2RUN}-rerun${RUN_NUM}-${NOW}.txt"
       RC=${PIPESTATUS[0]}
     else
-      ./integration-tests/test-playwright.sh -p console -s "${SUITE2RUN}" -h true | tee $HOSTDIR"/${SUITE2RUN}-rerun${RUN_NUM}-${NOW}.txt"
+      yarn test-playwright "${SUITE2RUN}" | tee $HOSTDIR"/${SUITE2RUN}-rerun${RUN_NUM}-${NOW}.txt"
       RC=${PIPESTATUS[0]}
     fi
   fi
@@ -254,9 +257,9 @@ RETRYMAX=$(jq -r .retries $PARAMSJ)
 export PLAYWRIGHT_PLUGIN_PULL_SPEC=quay.io/rh_ee_ahonkala/console-demo-plugin:ppc64le
 export CYPRESS_PLUGIN_PULL_SPEC=quay.io/rh_ee_ahonkala/console-demo-plugin:ppc64le
 
-PW_DIR="${ROOTDIR}/frontend/packages/integration-tests-playwright"
-OUTDIR="${ROOTDIR}/frontend/gui_test_screenshots"
-mkdir -p "$OUTDIR"
+PW_DIR="${ROOTDIR}/frontend/test-results"
+OUTDIR="${ROOTDIR}/frontend/playwright-report"
+#mkdir -p "$OUTDIR"
 
 # Install Playwright browser binaries if not present
 if [ -d "$ROOTDIR/frontend" ]; then
@@ -281,7 +284,7 @@ if [ -w $HOSTDIR ]; then
   [ -d "$OUTDIR" ] && cp -r $OUTDIR $HOSTDIR/out-$NOW/
   [ -d "$PW_DIR/test-results" ] && cp -r $PW_DIR/test-results $HOSTDIR/out-$NOW/
   [ -d "$PW_DIR/playwright-report" ] && cp -r $PW_DIR/playwright-report $HOSTDIR/out-$NOW/
-  [ -d "$PW_DIR/gui_test_screenshots" ] && cp -r $PW_DIR/gui_test_screenshots $HOSTDIR/out-$NOW/
+  #[ -d "$PW_DIR/gui_test_screenshots" ] && cp -r $PW_DIR/gui_test_screenshots $HOSTDIR/out-$NOW/
   ls $PW_DIR/junit*.xml >/dev/null 2>&1 && cp $PW_DIR/junit*.xml $HOSTDIR/out-$NOW/
   printInfo "Copied test outputs and artifacts to directory: $HOSTDIR/out-$NOW"
 else
