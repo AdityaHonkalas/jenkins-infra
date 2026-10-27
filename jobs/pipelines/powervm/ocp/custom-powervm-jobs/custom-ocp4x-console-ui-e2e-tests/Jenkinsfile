@@ -3,7 +3,7 @@
 pipeline {
     agent {
         docker {
-            image 'quay.io/rh_ee_ahonkala/console-e2e-ci:v22.10.26'
+            image 'quay.io/rh_ee_ahonkala/console-e2e-ci:v27.10.26'
             args '-v /etc/resolv.conf:/etc/resolv.conf -v /run/containerd/containerd.sock:/run/containerd/containerd.sock'
             label 'jump-vpc-x86_64'
         }
