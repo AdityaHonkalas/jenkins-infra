@@ -1,4 +1,4 @@
-@Library('jenkins-upstream-library@ai-new') _
+@Library('jenkins-upstream-library@master') _
 pipeline {
     agent {
         docker {
@@ -9,11 +9,11 @@ pipeline {
     }
     parameters {
         string(defaultValue: '', description: 'Build(quay image or build number)(Optional: this is for `release_image_override`)', name: 'Build')
-        string(defaultValue: '10', description: 'Enter time(in Minutes) to retain the cluster', name: 'KeepFor')
-        string(defaultValue: '1.22.4', description: 'Enter the Go Language Version', name: 'GoLangVersion')
-        choice(description: 'Select the assisted RHCOS version', choices: ['4.22','4.21','4.20','4.19', '4.18', '4.17', '4.16','4.15','4.14','4.13','4.12'], name: 'Release')
+        string(defaultValue: '60', description: 'Enter time(in Minutes) to retain the cluster', name: 'KeepFor')
+        string(defaultValue: '1.25.14', description: 'Enter the Go Language Version', name: 'GoLangVersion')
+        choice(description: 'Select the assisted RHCOS version', choices: ['10.2','9.8','9.6','4.23','4.22','4.21','4.20','4.19','4.18','4.17','4.16','4.15','4.14'], name: 'Release')
         string(defaultValue: '4.21', description: 'Enter assisted OCP version', name: 'OcpRelease')
-        choice(description: 'Select the RedHat Release Version', choices: ['9.7','9.6','9.5','9.4','9.3','9.2','9.1','9.0', '8.8','8.7'], name: 'RedHatRelease')
+        choice(description: 'Select the RedHat Release Version', choices: ['10.2','9.8','9.6','9.5','9.4','9.3','9.2','9.1','9.0','8.10'], name: 'RedHatRelease')
         choice(description: 'Select the AI(Assisted Installer) Install Type', choices: ['assisted', 'agent', 'sno'], name: 'InstallType')
         choice(description: 'Select the Cluster Type (compact, sno) default type is HA', choices: ['ha', 'compact', 'sno'], name: 'clusterType')
         booleanParam(defaultValue: false, name: 'RunE2e', description: 'Select if you want to run e2e tests. E2e runs after cluster Deployed')
@@ -35,7 +35,7 @@ pipeline {
 
         //Env constants
         HARDWARE_CHOSE = "P9"
-        TERRAFORM_VER = "1.9.1"
+        TERRAFORM_VER = "1.14.4"
         TARGET = "deploy-openshift4-powervc"
         //TEMPLATE_FILE = ".${TARGET}-abi.tfvars.template"
         AI_INSTALL_TYPE = "${params.InstallType}"
@@ -45,9 +45,10 @@ pipeline {
         SCRIPT_DEPLOYMENT = false
         WAIT_FOR_DEBUG = "1"
 
+        // Change for powervc terraform template: Use the default uptream repo "https://github.com/ocp-power-automation/ocp4-ai-power"
         //Branch
-        OPENSHIFT_POWERVC_GIT_TF_DEPLOY_PROJECT="https://github.com/Poorna-Gottimukkula1/ocp4-ai-power.git"
-        OPENSHIFT_POWERVC_GIT_TF_DEPLOY_BRANCH="ci"//The download branch
+        OPENSHIFT_POWERVC_GIT_TF_DEPLOY_PROJECT="https://github.com/ocp-power-automation/ocp4-ai-power"
+        OPENSHIFT_POWERVC_GIT_TF_DEPLOY_BRANCH="main"//The download branch
 
         //E2e and Scale specific variables
         ENABLE_E2E_TEST="true"
@@ -55,9 +56,9 @@ pipeline {
         GOLANG_TARBALL="https://dl.google.com/go/go${params.GoLangVersion}.linux-ppc64le.tar.gz"
 
         //Parameters
-        REDHAT_RELEASE="${params.RedHatRelease}"
-        OCP_RELEASE="${params.Release}"
-        OCP_VERSION="${params.OcpRelease}"
+        REDHAT_RELEASE="${params.RedHatRelease}" // for RHEL image version
+        OCP_RELEASE="${params.Release}" // for RHCOS image version
+        OCP_VERSION="${params.OcpRelease}" // for openshift release selection
         CONFIG_TYPE="min"
         ENABLE_E2E="${params.RunE2e}"
         ENABLE_MULTI="${params.multiArch}"
@@ -118,13 +119,16 @@ pipeline {
                     env.MASTER_MEMORY = "32"
                     env.WORKER_MEMORY = "32"
                     if ( ENABLE_MULTI == "true") {
-                        if (env.OCP_RELEASE == "4.21") {
-                            env.OPENSHIFT_INSTALL_TARBALL="https://mirror.openshift.com/pub/openshift-v4/multi/clients/ocp-dev-preview/candidate-${OCP_RELEASE}/ppc64le/openshift-install-linux.tar.gz"
-                            env.OPENSHIFT_CLIENT_TARBALL="https://mirror.openshift.com/pub/openshift-v4/multi/clients/ocp-dev-preview/candidate-${OCP_RELEASE}/ppc64le/openshift-client-linux.tar.gz"
+                        // for latest ocp release
+                        if ( env.OCP_RELEASE == "5.1" || env.OCP_RELEASE == "4.23") {
+                            env.OPENSHIFT_INSTALL_TARBALL="https://mirror.openshift.com/pub/openshift-v5/multi/clients/ocp-dev-preview/candidate-${OCP_RELEASE}/ppc64le/openshift-install-linux.tar.gz"
+                            env.OPENSHIFT_CLIENT_TARBALL="https://mirror.openshift.com/pub/openshift-v5/multi/clients/ocp-dev-preview/candidate-${OCP_RELEASE}/ppc64le/openshift-client-linux.tar.gz"
+                            env.OPENSHIFT_CLIENT_TARBALL_AMD64="https://mirror.openshift.com/pub/openshift-v5/multi/clients/ocp-dev-preview/candidate-${OCP_RELEASE}/amd64/openshift-client-linux.tar.gz"
                         }
                         else {
                             env.OPENSHIFT_INSTALL_TARBALL="https://mirror.openshift.com/pub/openshift-v4/multi/clients/ocp/latest-${OCP_RELEASE}/ppc64le/openshift-install-linux.tar.gz"
                             env.OPENSHIFT_CLIENT_TARBALL="https://mirror.openshift.com/pub/openshift-v4/multi/clients/ocp/latest-${OCP_RELEASE}/ppc64le/openshift-client-linux.tar.gz"
+                            env.OPENSHIFT_CLIENT_TARBALL_AMD64="https://mirror.openshift.com/pub/openshift-v4/multi/clients/ocp/latest-${OCP_RELEASE}/amd64/openshift-client-linux.tar.gz"
                         }
                     }
                 }
@@ -134,8 +138,9 @@ pipeline {
         stage('pull artifact') {
             steps {
                 script {
-                    //getArtifacts("mirror-openshift-release", "latest-${OCP_RELEASE}-build.txt")
-                    //getArtifacts("powervm/poll-powervc-images", "cicd-rhcos-${OCP_RELEASE}.latest.txt")
+                    //Allow to pull latest nightly build for ${OCP_VERSION} 
+                    getArtifacts("mirror-openshift-release", "latest-${OCP_VERSION}-build.txt")
+                    getArtifacts("powervm/poll-powervc-images", "cicd-rhcos-${OCP_RELEASE}.latest.txt")
                     getArtifacts("powervm/poll-powervc-images", "cicd-rhel-${REDHAT_RELEASE}.latest.txt")
                 }
             }
@@ -155,15 +160,6 @@ pipeline {
                         if (env.BUILD?.trim()) {
                             if (!env.BUILD.contains('quay')) {
                                 env.OPENSHIFT_IMAGE  = "docker-na.artifactory.swg-devops.com/sys-powercloud-docker-local/ocp-ppc64le/release-ppc64le:${env.BUILD}"
-                                // sh '''
-                                //     nerdctl login -u ${ARTIFACTORY_USER} -p ${ARTIFACTORY_TOKEN} docker-na.artifactory.swg-devops.com/sys-powercloud-docker-local
-                                //     nerdctl pull ${OPENSHIFT_IMAGE}
-                                //     if [ $? -ne 0 ]; then
-                                //         echo "${OPENSHIFT_IMAGE}  not found"
-                                //         exit 1
-                                //     fi
-                                //     nerdctl rmi ${OPENSHIFT_IMAGE}
-                                // '''
                             }
                             else {
                                env.OPENSHIFT_IMAGE=env.BUILD
@@ -173,8 +169,19 @@ pipeline {
                             echo "CURRENT build is empty"
                         }
 
-                        env.RHCOS_IMAGE_NAME = "cicd-empty-image"
-                        env.RHCOS_IMAGE_ID = "c8a979a0-7707-4d23-b5b6-419b953676d1"
+                        // Change for RHCOS_IMAGE: Remove the invalid hardcoded RHCOS_IMAGE/ RHCOS_IMAGE_ID with the images from powervc-image-poll job    
+                        //env.RHCOS_IMAGE_NAME = "cicd-empty-image"
+                        //env.RHCOS_IMAGE_ID = "c8a979a0-7707-4d23-b5b6-419b953676d1"
+                        if (fileExists("deploy/artifactory/cicd-rhcos-${OCP_RELEASE}.latest.txt")) {
+                            env.RHCOS_IMAGE = readFile "deploy/artifactory/cicd-rhcos-${OCP_RELEASE}.latest.txt"
+                            env.RHCOS_IMAGE_NAME = env.RHCOS_IMAGE.split()[0].trim()
+                            env.RHCOS_IMAGE_ID = env.RHCOS_IMAGE.split()[1].trim()
+                        }
+                        else {
+                            echo "cicd-rhcos-${OCP_RELEASE}.latest.txt file does not exist. Please check poll-powervc-images job"
+                            throw err
+                        }
+
                         if (fileExists("deploy/artifactory/cicd-rhel-${REDHAT_RELEASE}.latest.txt")) {
                             env.BASTION_IMAGE = readFile "deploy/artifactory/cicd-rhel-${REDHAT_RELEASE}.latest.txt"
                             env.BASTION_IMAGE_NAME = env.BASTION_IMAGE.split()[0].trim()
